@@ -6,11 +6,5 @@
     "src/app/api/sessions/[sessionId]/route.ts": { "maxDuration": 60 },
     "src/app/api/sessions/[sessionId]/qr/route.ts": { "maxDuration": 60 },
     "src/app/api/sessions/startup/route.ts": { "maxDuration": 60 }
-  },
-  "crons": [
-    {
-      "path": "/api/sessions/startup",
-      "schedule": "* * * * *"
-    }
-  ]
+  }
 }
