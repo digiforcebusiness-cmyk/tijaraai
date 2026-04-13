@@ -4,9 +4,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+// A CONNECTING session with no update for >90 s is stuck — allow retry.
+const CONNECTING_TIMEOUT_MS = 90_000;
+
 // GET /api/sessions/[sessionId]/qr
-// Long-polls up to 30 s waiting for the QR to appear in the DB,
-// so the frontend gets the QR code on the very first request.
 export async function GET(
   _req: NextRequest,
   { params }: { params: { sessionId: string } }
@@ -18,14 +19,14 @@ export async function GET(
 
     const userId = (session.user as typeof session.user & { id: string }).id;
 
-    let waSession = await prisma.whatsAppSession.findFirst({
+    const waSession = await prisma.whatsAppSession.findFirst({
       where: { id: params.sessionId, userId },
     });
 
     if (!waSession)
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
-    // Already connected or terminal state — return immediately
+    // ── Terminal / already-done states ──────────────────────────────────────
     if (
       waSession.status === "CONNECTED" ||
       waSession.status === "BANNED" ||
@@ -36,60 +37,54 @@ export async function GET(
       });
     }
 
-    // Return existing QR if still fresh (QR_PENDING)
+    // ── Return existing QR while it is fresh ────────────────────────────────
     if (waSession.status === "QR_PENDING" && waSession.qrCode) {
       return NextResponse.json({
         data: { qrCode: waSession.qrCode, status: waSession.status },
       });
     }
 
-    // Only start a new session if not already in-flight (DISCONNECTED only)
+    // ── Decide whether to (re)start the session ─────────────────────────────
     const { createSession, getSessionStatus } = await import("@/lib/whatsapp");
     const socketAlive = getSessionStatus(waSession.id) === "active";
-    const alreadyStarting = waSession.status === "CONNECTING";
+
+    // CONNECTING is "stuck" when updatedAt hasn't changed for >90 s
+    const stuckConnecting =
+      waSession.status === "CONNECTING" &&
+      Date.now() - waSession.updatedAt.getTime() > CONNECTING_TIMEOUT_MS;
+
+    const alreadyStarting =
+      waSession.status === "CONNECTING" && !stuckConnecting;
 
     if (!socketAlive && !alreadyStarting) {
-      // waitUntil keeps the Vercel lambda alive while Baileys connects
+      console.log("[qr/route] Launching createSession for", params.sessionId,
+        stuckConnecting ? "(stuck — retry)" : "(fresh start)");
+
+      // waitUntil keeps the Vercel lambda alive AFTER this response is sent
+      // so Baileys has time to connect and write the QR code to the DB.
       waitUntil(
-        createSession(waSession.id).catch((e) =>
-          console.error("[qr/route] createSession error:", e)
-        )
+        createSession(waSession.id).catch((e: Error) => {
+          console.error("[qr/route] createSession failed:", e.message);
+          // Reset to DISCONNECTED so the next frontend poll can try again.
+          return prisma.whatsAppSession
+            .update({
+              where: { id: params.sessionId },
+              data: { status: "DISCONNECTED" },
+            })
+            .catch(() => {});
+        })
       );
     }
 
-    // Long-poll: wait up to 30 s for QR to appear in DB
-    // (polls DB every 2 s — 15 attempts)
-    for (let i = 0; i < 15; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-
-      const updated = await prisma.whatsAppSession.findUnique({
-        where: { id: waSession.id },
-        select: { qrCode: true, status: true },
-      });
-
-      if (!updated) break;
-
-      if (updated.qrCode || updated.status === "CONNECTED") {
-        return NextResponse.json({
-          data: { qrCode: updated.qrCode, status: updated.status },
-        });
-      }
-
-      if (updated.status === "BANNED" || updated.status === "LOGGED_OUT") {
-        return NextResponse.json({
-          data: { qrCode: null, status: updated.status },
-        });
-      }
-    }
-
-    // Timed out — return current state so frontend can retry
-    const final = await prisma.whatsAppSession.findUnique({
-      where: { id: waSession.id },
-      select: { qrCode: true, status: true },
-    });
-
+    // Return immediately — the frontend polls every 5 s and will pick up
+    // the QR once createSession saves it to the database.
     return NextResponse.json({
-      data: { qrCode: final?.qrCode ?? null, status: final?.status ?? waSession.status },
+      data: {
+        qrCode: waSession.qrCode,
+        // Report CONNECTING so the UI shows the spinner, not "No QR code yet"
+        status:
+          waSession.status === "DISCONNECTED" ? "CONNECTING" : waSession.status,
+      },
     });
   } catch (err) {
     console.error("[qr/route]", err);

@@ -80,7 +80,7 @@ export function QrPanel({ sessionId, sessionName }: QrModalProps) {
 
       {/* QR area */}
       <div className="flex h-64 w-64 items-center justify-center rounded-xl border-2 border-dashed bg-muted">
-        {loading && !data?.qrCode ? (
+        {(loading || data?.status === "CONNECTING") && !data?.qrCode ? (
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-8 w-8 animate-spin" />
             <span className="text-sm">Generating QR…</span>
