@@ -36,6 +36,12 @@ export function onStatusChange(sessionId: string, cb: StatusCallback) {
 // ─── Create / Reconnect ───────────────────────────────────────────────────────
 
 export async function createSession(sessionId: string): Promise<void> {
+  // Mark as CONNECTING immediately so concurrent requests don't start a second session
+  await prisma.whatsAppSession.update({
+    where: { id: sessionId },
+    data: { status: "CONNECTING", qrCode: null },
+  }).catch(console.error);
+
   // Dynamic import — keeps Baileys out of the webpack bundle
   const {
     default: makeWASocket,
