@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
+
+// On Vercel: waitUntil keeps the lambda alive after the response is sent.
+// On Railway/VPS: the process is persistent, so we just run the promise.
+function keepAlive(p: Promise<unknown>) {
+  if (process.env.VERCEL) {
+    import("@vercel/functions").then(({ waitUntil }) => waitUntil(p)).catch(() => {});
+  }
+  // On non-Vercel, the promise runs in background naturally (process stays alive)
+}
 
 async function reconnectSessions() {
   const { createSession, getSessionStatus } = await import("@/lib/whatsapp");
@@ -23,7 +31,7 @@ async function reconnectSessions() {
     console.log(`[startup] Reconnecting "${s.name}" (${s.id})`);
     // waitUntil keeps the lambda alive while the socket is connected,
     // allowing incoming WhatsApp messages to be received and processed.
-    waitUntil(
+    keepAlive(
       createSession(s.id).catch(async (err: Error) => {
         console.error(`[startup] Failed to reconnect "${s.name}":`, err.message);
         await prisma.whatsAppSession

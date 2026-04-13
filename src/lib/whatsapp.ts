@@ -122,7 +122,13 @@ export async function createSession(sessionId: string): Promise<void> {
           shouldReconnect ? "DISCONNECTED" : "LOGGED_OUT"
         );
         activeSessions.delete(sessionId);
-        resolve(); // Lambda can now terminate; cron will reconnect if needed
+        resolve(); // Resolves waitUntil on Vercel
+
+        // On persistent servers (Railway/VPS), reconnect automatically.
+        // On Vercel, the cron handles reconnection after the lambda dies.
+        if (shouldReconnect && !process.env.VERCEL) {
+          setTimeout(() => createSession(sessionId), 4_000);
+        }
       }
     });
   });
