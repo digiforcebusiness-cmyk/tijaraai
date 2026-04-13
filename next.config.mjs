@@ -1,7 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Prisma must be external (native bindings).
-  // Baileys must NOT be here — it's ESM-only and external = require() which breaks ESM.
   serverExternalPackages: ["@prisma/client", "prisma"],
 
   webpack: (config, { isServer }) => {
@@ -10,10 +8,18 @@ const nextConfig = {
         ? config.externals
         : [config.externals].filter(Boolean);
 
-      // sharp stays external (native binary).
-      // baileys, @hapi/boom, pino are ESM — do NOT externalize them,
-      // let webpack bundle them so dynamic import() works correctly.
-      config.externals = [...existingExternals, "sharp"];
+      config.externals = [
+        ...existingExternals,
+        "sharp",
+        // "module X" tells webpack to emit  import("X")  in the bundle
+        // instead of  require("X").  ESM-only packages MUST use this form
+        // because require() of an ES module throws ERR_REQUIRE_ESM.
+        // import() is valid inside any Node.js async function, including CJS.
+        {
+          "baileys": "module baileys",
+          "@hapi/boom": "module @hapi/boom",
+        },
+      ];
     } else {
       // Baileys is server-only — stub out Node built-ins on the client
       config.resolve.fallback = {
@@ -27,13 +33,6 @@ const nextConfig = {
         child_process: false,
       };
     }
-
-    // Allow webpack to process ESM packages (baileys and its deps use .mjs / "type":"module")
-    config.module.rules.push({
-      test: /\.m?js$/,
-      type: "javascript/auto",
-      resolve: { fullySpecified: false },
-    });
 
     return config;
   },
