@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Smartphone, Wifi, WifiOff, Bot, Trash2, Loader2, Facebook, Instagram, AlertCircle } from "lucide-react";
 import { Header } from "@/components/dashboard/header";
@@ -29,6 +29,8 @@ function SocialPagesSection() {
   const [userToken, setUserToken] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [origin, setOrigin] = useState("");
+  useEffect(() => { setOrigin(window.location.origin); }, []);
 
   const { data: pages = [] } = useQuery<SocialPage[]>({
     queryKey: ["social-pages"],
@@ -153,7 +155,7 @@ function SocialPagesSection() {
             <p className="font-medium text-foreground">Webhook setup (required once)</p>
             <p>In your Facebook App → Webhooks → Add callback URL:</p>
             <code className="block bg-background border rounded px-2 py-1 text-[11px] select-all">
-              {typeof window !== "undefined" ? window.location.origin : "https://yourdomain.com"}/api/webhooks/meta
+              {origin || "https://tijarabot.com"}/api/webhooks/meta
             </code>
             <p>Verify token: <code className="bg-background border rounded px-1">{process.env.NEXT_PUBLIC_META_VERIFY_TOKEN ?? "wa-crm-meta-webhook"}</code></p>
             <p>Subscribe to: <code>messages</code> (for both Page and Instagram)</p>
