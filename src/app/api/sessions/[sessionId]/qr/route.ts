@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -22,15 +23,28 @@ export async function GET(
     if (!waSession)
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
-    // Kick off Baileys connection if:
-    // - session is disconnected/pending, OR
-    // - session says CONNECTED in DB but the socket is dead (e.g. after server restart)
+    // Kick off Baileys connection only when truly needed.
+    // On Vercel, activeSessions is always empty (ephemeral lambda) so we rely
+    // on DB status instead of in-memory socket state to avoid restarting the
+    // session on every poll and resetting the QR code.
     const { createSession, getSessionStatus } = await import("@/lib/whatsapp");
     const socketAlive = getSessionStatus(waSession.id) === "active";
+    const alreadyStarting =
+      waSession.status === "QR_PENDING" || waSession.status === "CONNECTING";
 
-    if (!socketAlive && waSession.status !== "BANNED" && waSession.status !== "LOGGED_OUT") {
-      createSession(waSession.id).catch((e) =>
-        console.error("[qr/route] createSession error:", e)
+    if (
+      !socketAlive &&
+      !alreadyStarting &&
+      waSession.status !== "BANNED" &&
+      waSession.status !== "LOGGED_OUT" &&
+      waSession.status !== "CONNECTED"
+    ) {
+      // waitUntil keeps the Vercel lambda alive until Baileys finishes
+      // generating the QR and saves it to the database.
+      waitUntil(
+        createSession(waSession.id).catch((e) =>
+          console.error("[qr/route] createSession error:", e)
+        )
       );
     }
 
