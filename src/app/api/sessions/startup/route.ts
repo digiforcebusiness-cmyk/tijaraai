@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 
+// Sessions updated within the last 50s are probably still alive in another lambda.
+// Skip them to avoid opening a duplicate socket (WhatsApp only allows one connection
+// per number — a second socket would immediately kill the first).
+const RECENTLY_CONNECTED_MS = 50_000;
+
 async function reconnectSessions() {
   const { createSession, getSessionStatus } = await import("@/lib/whatsapp");
 
   const sessions = await prisma.whatsAppSession.findMany({
     where: { status: { in: ["CONNECTED", "CONNECTING", "QR_PENDING"] } },
-    select: { id: true, name: true, status: true },
+    select: { id: true, name: true, status: true, updatedAt: true },
   });
 
   if (sessions.length === 0) {
@@ -16,17 +21,27 @@ async function reconnectSessions() {
 
   let reconnected = 0;
   for (const s of sessions) {
+    // In-process check (works when the same lambda instance handles multiple requests)
     if (getSessionStatus(s.id) === "active") {
-      console.log(`[startup] Session "${s.name}" already active — skipping`);
+      console.log(`[startup] Session "${s.name}" active in this instance — skipping`);
       continue;
     }
-    console.log(`[startup] Reconnecting "${s.name}" (${s.id})`);
+    // DB-based check: if updated very recently, another lambda likely has the socket
+    const msSinceUpdate = Date.now() - s.updatedAt.getTime();
+    if (s.status === "CONNECTED" && msSinceUpdate < RECENTLY_CONNECTED_MS) {
+      console.log(`[startup] Session "${s.name}" connected ${Math.round(msSinceUpdate / 1000)}s ago — skipping`);
+      continue;
+    }
+    console.log(`[startup] Reconnecting "${s.name}" (${s.id}) — last update ${Math.round(msSinceUpdate / 1000)}s ago`);
     // waitUntil keeps the lambda alive while the socket is connected,
     // allowing incoming WhatsApp messages to be received and processed.
     waitUntil(
-      createSession(s.id).catch((err: Error) =>
-        console.error(`[startup] Failed to reconnect "${s.name}":`, err.message)
-      )
+      createSession(s.id).catch(async (err: Error) => {
+        console.error(`[startup] Failed to reconnect "${s.name}":`, err.message);
+        await prisma.whatsAppSession
+          .update({ where: { id: s.id }, data: { status: "DISCONNECTED" } })
+          .catch(() => {});
+      })
     );
     reconnected++;
     // Stagger starts to avoid hammering Baileys/Supabase simultaneously
