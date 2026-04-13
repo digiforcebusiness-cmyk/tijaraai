@@ -1,9 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    serverComponentsExternalPackages: ["@prisma/client", "prisma", "baileys"],
-    instrumentationHook: true,
-  },
+  // Stable in Next.js 14.1+ (was experimental.serverComponentsExternalPackages)
+  serverExternalPackages: ["@prisma/client", "prisma", "baileys"],
   webpack: (config, { isServer }) => {
     if (isServer) {
       // Never bundle baileys or sharp — they must run natively

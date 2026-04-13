@@ -6,15 +6,10 @@
  */
 
 import type { WASocket, proto } from "baileys";
-import path from "path";
-import fs from "fs";
 import qrcode from "qrcode";
 import { prisma } from "./prisma";
 import { generateReply } from "./claude";
 import { pushOrderToPlatform } from "./integrations";
-
-const SESSION_BASE_PATH =
-  process.env.WHATSAPP_SESSION_PATH ?? "./whatsapp-sessions";
 
 // In-process registry — survives hot-reload via global ref
 const g = globalThis as typeof globalThis & {
@@ -44,7 +39,6 @@ export async function createSession(sessionId: string): Promise<void> {
   // Dynamic import — keeps Baileys out of the webpack bundle
   const {
     default: makeWASocket,
-    useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
   } = await import("baileys");
@@ -52,10 +46,8 @@ export async function createSession(sessionId: string): Promise<void> {
   const { default: pino } = await import("pino");
   const logger = pino({ level: "silent" });
 
-  const sessionPath = path.join(SESSION_BASE_PATH, sessionId);
-  fs.mkdirSync(sessionPath, { recursive: true });
-
-  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+  const { useSupabaseAuthState } = await import("./whatsapp-auth-state");
+  const { state, saveCreds } = await useSupabaseAuthState(sessionId);
   const { version } = await fetchLatestBaileysVersion();
 
   const socket = makeWASocket({

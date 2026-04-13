@@ -8,10 +8,13 @@ export async function register() {
   // Wait for server to be fully ready before calling API
   await new Promise((r) => setTimeout(r, 6000));
 
-  const port = process.env.PORT ?? 3000;
+  // Use NEXTAUTH_URL in production (Vercel) instead of localhost
+  const baseUrl =
+    process.env.NEXTAUTH_URL ??
+    `http://localhost:${process.env.PORT ?? 3000}`;
   const secret = process.env.INTERNAL_STARTUP_SECRET ?? "wa-crm-startup";
 
-  fetch(`http://localhost:${port}/api/sessions/startup`, {
+  fetch(`${baseUrl}/api/sessions/startup`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -1,0 +1,10 @@
+{
+  "buildCommand": "prisma generate && next build",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "functions": {
+    "src/app/api/sessions/[sessionId]/route.ts": { "maxDuration": 60 },
+    "src/app/api/sessions/[sessionId]/qr/route.ts": { "maxDuration": 60 },
+    "src/app/api/sessions/startup/route.ts": { "maxDuration": 60 }
+  }
+}
