@@ -1,0 +1,459 @@
+// Prisma Schema — WhatsApp CRM (Qunvert-style)
+// Database: PostgreSQL (Supabase)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          UserRole  @default(OWNER)
+  plan          PlanType  @default(STARTER)
+  aiTokensUsed  Int       @default(0)
+  storageUsed   Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  whatsAppSessions WhatsAppSession[]
+  contacts         Contact[]
+  orders           Order[]
+  campaigns        Campaign[]
+  teamMembers      TeamMember[]
+  widgets          Widget[]
+  integrations     Integration[]
+  products         Product[]
+  socialPages      SocialPage[]
+  flows            Flow[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── WhatsApp ─────────────────────────────────────────────────────────────────
+
+model WhatsAppSession {
+  id          String         @id @default(cuid())
+  userId      String
+  name        String
+  phoneNumber String?
+  status      WhatsAppStatus @default(DISCONNECTED)
+  qrCode      String?        @db.Text
+  sessionData Json?
+  webhookUrl  String?
+  aiEnabled   Boolean        @default(false)
+  aiPrompt    String?        @db.Text
+  language    String         @default("en")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts  Contact[]
+  messages  Message[]
+  campaigns Campaign[]
+
+  @@map("whatsapp_sessions")
+}
+
+// ─── Social Pages (Facebook / Instagram) ─────────────────────────────────────
+
+model SocialPage {
+  id          String       @id @default(cuid())
+  userId      String
+  platform    SocialPlatform
+  pageId      String
+  pageName    String
+  accessToken String       @db.Text
+  pictureUrl  String?
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts Contact[]
+
+  @@unique([userId, platform, pageId])
+  @@map("social_pages")
+}
+
+// ─── Contacts ─────────────────────────────────────────────────────────────────
+
+model Contact {
+  id            String    @id @default(cuid())
+  userId        String
+  sessionId     String?
+  socialPageId  String?
+  jid           String
+  name          String?
+  phoneNumber   String
+  profilePicUrl String?
+  isBlocked     Boolean   @default(false)
+  isLead        Boolean   @default(false)
+  tags          String[]  @default([])
+  notes         String?   @db.Text
+  lastMessageAt DateTime?
+  totalMessages Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  channel           SocialPlatform?   // null = WhatsApp
+
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session           WhatsAppSession?  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  socialPage        SocialPage?       @relation(fields: [socialPageId], references: [id], onDelete: Cascade)
+  messages          Message[]
+  orders            Order[]
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([sessionId, jid])
+  @@index([userId, lastMessageAt])
+  @@index([userId, phoneNumber])
+  @@map("contacts")
+}
+
+// ─── Messages ─────────────────────────────────────────────────────────────────
+
+model Message {
+  id          String           @id @default(cuid())
+  sessionId   String?
+  contactId   String
+  waMessageId String?
+  direction   MessageDirection
+  type        MessageType      @default(TEXT)
+  body        String           @db.Text
+  mediaUrl    String?
+  status      MessageStatus    @default(SENT)
+  isAiReply   Boolean          @default(false)
+  metadata    Json?
+  timestamp   DateTime         @default(now())
+
+  session WhatsAppSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  contact Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, contactId])
+  @@index([timestamp])
+  @@map("messages")
+}
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+
+model Order {
+  id          String      @id @default(cuid())
+  userId      String
+  contactId   String
+  orderNumber String      @unique @default(cuid())
+  status      OrderStatus @default(PENDING)
+  items       Json
+  totalAmount Decimal     @db.Decimal(10, 2)
+  currency    String      @default("USD")
+  notes       String?     @db.Text
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  platform         String?
+  externalOrderId  String?
+  externalOrderUrl String?
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([userId, platform, externalOrderId])
+  @@index([contactId, status, createdAt])
+  @@map("orders")
+}
+
+// ─── Campaigns (Broadcast) ────────────────────────────────────────────────────
+
+model Campaign {
+  id          String         @id @default(cuid())
+  userId      String
+  sessionId   String
+  name        String
+  message     String         @db.Text
+  mediaUrl    String?
+  status      CampaignStatus @default(DRAFT)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  totalSent   Int            @default(0)
+  totalFailed Int            @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session    WhatsAppSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  recipients CampaignRecipient[]
+
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id         String                  @id @default(cuid())
+  campaignId String
+  contactId  String
+  status     CampaignRecipientStatus @default(PENDING)
+  sentAt     DateTime?
+  error      String?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId])
+  @@map("campaign_recipients")
+}
+
+// ─── Team Members ─────────────────────────────────────────────────────────────
+
+model TeamMember {
+  id          String         @id @default(cuid())
+  ownerId     String
+  email       String
+  name        String?
+  role        UserRole       @default(AGENT)
+  status      InviteStatus   @default(PENDING)
+  inviteToken String?        @unique
+  joinedAt    DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, email])
+  @@map("team_members")
+}
+
+// ─── Widgets (Website Chat Button) ───────────────────────────────────────────
+
+model Widget {
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
+  welcomeMessage String   @default("Hi! How can we help you?")
+  buttonColor    String   @default("#25D366")
+  position       String   @default("bottom-right")
+  phoneNumber    String
+  isActive       Boolean  @default(true)
+  domains        String[] @default([])
+  embedViews     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("widgets")
+}
+
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+model Integration {
+  id             String          @id @default(cuid())
+  userId         String
+  type           IntegrationType
+  shopDomain     String?
+  accessToken    String?
+  siteUrl        String?
+  consumerKey    String?
+  consumerSecret String?
+  isActive       Boolean         @default(true)
+  lastSyncAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@map("integrations")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  OWNER
+  ADMIN
+  AGENT
+}
+
+enum PlanType {
+  STARTER
+  ADVANCED
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum WhatsAppStatus {
+  DISCONNECTED
+  QR_PENDING
+  CONNECTING
+  CONNECTED
+  BANNED
+  LOGGED_OUT
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  LOCATION
+  CONTACT
+  REACTION
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+enum IntegrationType {
+  SHOPIFY
+  WOOCOMMERCE
+  YOUCAN
+  LIGHTFUNNELS
+  GOOGLESHEETS
+  FACEBOOK
+  INSTAGRAM
+  TIKTOK
+}
+
+enum SocialPlatform {
+  FACEBOOK
+  INSTAGRAM
+}
+
+// ─── Flows (Automation) ───────────────────────────────────────────────────────
+
+model Flow {
+  id            String    @id @default(cuid())
+  userId        String
+  name          String
+  trigger       String    // SHOPIFY_ORDER | YOUCAN_ORDER | LIGHTFUNNEL_STORE | LIGHTFUNNEL_LEAD | WOOCOMMERCE_ORDER
+  triggerConfig Json?
+  actions       Json      // Array<{ type: "SEND_WA_MESSAGE"; template: string } | { type: "UPDATE_STATUS"; status: string }>
+  isActive      Boolean   @default(true)
+  lastRunAt     DateTime?
+  runCount      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("flows")
+}
+
+// ─── Products (AI catalog) ────────────────────────────────────────────────────
+
+model Product {
+  id                String   @id @default(cuid())
+  userId            String
+  platform          String
+  externalProductId String
+  name              String
+  description       String?  @db.Text
+  price             Float    @default(0)
+  comparePrice      Float?
+  sku               String?
+  stock             Int?
+  imageUrl          String?
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform, externalProductId])
+  @@map("products")
+}
