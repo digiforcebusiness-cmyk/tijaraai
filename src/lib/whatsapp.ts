@@ -66,57 +66,6 @@ export async function createSession(sessionId: string): Promise<void> {
 
   activeSessions.set(sessionId, { socket });
 
-  // ── Connection events ──────────────────────────────────────────────────────
-
-  socket.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      try {
-        const qrDataUrl = await qrcode.toDataURL(qr);
-        await prisma.whatsAppSession.update({
-          where: { id: sessionId },
-          data: { qrCode: qrDataUrl, status: "QR_PENDING" },
-        });
-        qrCallbacks.get(sessionId)?.(qrDataUrl);
-        statusCallbacks.get(sessionId)?.("QR_PENDING");
-      } catch (e) {
-        console.error("[whatsapp] QR update error:", e);
-      }
-    }
-
-    if (connection === "open") {
-      const phoneNumber =
-        socket.user?.id?.replace(/:.*@/, "@").split("@")[0] ?? null;
-      await prisma.whatsAppSession.update({
-        where: { id: sessionId },
-        data: { status: "CONNECTED", qrCode: null, phoneNumber },
-      }).catch(console.error);
-      statusCallbacks.get(sessionId)?.("CONNECTED");
-    }
-
-    if (connection === "close") {
-      const { Boom } = await import("@hapi/boom");
-      const err = lastDisconnect?.error;
-      const statusCode = (err instanceof Boom) ? err.output.statusCode : 0;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      await prisma.whatsAppSession.update({
-        where: { id: sessionId },
-        data: { status: shouldReconnect ? "DISCONNECTED" : "LOGGED_OUT" },
-      }).catch(console.error);
-
-      statusCallbacks.get(sessionId)?.(
-        shouldReconnect ? "DISCONNECTED" : "LOGGED_OUT"
-      );
-      activeSessions.delete(sessionId);
-
-      if (shouldReconnect) {
-        setTimeout(() => createSession(sessionId), 4_000);
-      }
-    }
-  });
-
   socket.ev.on("creds.update", saveCreds);
 
   socket.ev.on("messages.upsert", async ({ messages: msgs, type }) => {
@@ -124,6 +73,58 @@ export async function createSession(sessionId: string): Promise<void> {
     for (const msg of msgs) {
       await handleIncomingMessage(sessionId, socket, msg).catch(console.error);
     }
+  });
+
+  // ── Connection events — return a long-lived promise ────────────────────────
+  // The promise only resolves when the connection closes.
+  // This is critical on Vercel: waitUntil(createSession(...)) keeps the lambda
+  // alive for the full session duration so incoming messages are received.
+  return new Promise<void>((resolve) => {
+    socket.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        try {
+          const qrDataUrl = await qrcode.toDataURL(qr);
+          await prisma.whatsAppSession.update({
+            where: { id: sessionId },
+            data: { qrCode: qrDataUrl, status: "QR_PENDING" },
+          });
+          qrCallbacks.get(sessionId)?.(qrDataUrl);
+          statusCallbacks.get(sessionId)?.("QR_PENDING");
+        } catch (e) {
+          console.error("[whatsapp] QR update error:", e);
+        }
+      }
+
+      if (connection === "open") {
+        const phoneNumber =
+          socket.user?.id?.replace(/:.*@/, "@").split("@")[0] ?? null;
+        await prisma.whatsAppSession.update({
+          where: { id: sessionId },
+          data: { status: "CONNECTED", qrCode: null, phoneNumber },
+        }).catch(console.error);
+        statusCallbacks.get(sessionId)?.("CONNECTED");
+      }
+
+      if (connection === "close") {
+        const { Boom } = await import("@hapi/boom");
+        const err = lastDisconnect?.error;
+        const statusCode = (err instanceof Boom) ? err.output.statusCode : 0;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        await prisma.whatsAppSession.update({
+          where: { id: sessionId },
+          data: { status: shouldReconnect ? "DISCONNECTED" : "LOGGED_OUT" },
+        }).catch(console.error);
+
+        statusCallbacks.get(sessionId)?.(
+          shouldReconnect ? "DISCONNECTED" : "LOGGED_OUT"
+        );
+        activeSessions.delete(sessionId);
+        resolve(); // Lambda can now terminate; cron will reconnect if needed
+      }
+    });
   });
 }
 
